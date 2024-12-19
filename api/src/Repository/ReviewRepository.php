@@ -24,6 +24,30 @@ class ReviewRepository extends ServiceEntityRepository
         parent::__construct($registry, Review::class);
     }
 
+    public function findMostReviewedDay(): ?array
+    {
+        return $this->createQueryBuilder('r')
+            ->select('DATE(r.publishDate) as publishDate, COUNT(r.id) as reviewCount')
+            ->groupBy('publishDate')
+            ->orderBy('reviewCount', 'DESC')
+            ->addOrderBy('publishDate', 'DESC')
+            ->setMaxResults(1)
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+
+    public function findMostReviewedMonth(): ?array
+    {
+        return $this->createQueryBuilder('r')
+            ->select('DATE_FORMAT(r.publishDate, \'%Y-%m-01\') as publishDate, COUNT(r.id) as reviewCount')
+            ->groupBy('publishDate')
+            ->orderBy('reviewCount', 'DESC')
+            ->addOrderBy('publishDate', 'DESC')
+            ->setMaxResults(1)
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+
     public function getAverageRating(Book $book): ?int
     {
         $rating = $this->createQueryBuilder('r')

@@ -9,14 +9,17 @@ use App\DataFixtures\Factory\BookmarkFactory;
 use App\DataFixtures\Factory\ReviewFactory;
 use App\DataFixtures\Factory\UserFactory;
 use App\Enum\BookCondition;
+use App\Enum\PromotionStatus;
 use Symfony\Component\Serializer\Encoder\DecoderInterface;
 use Zenstruck\Foundry\Story;
+use Symfony\Component\String\Slugger\SluggerInterface;
+
 
 use function Zenstruck\Foundry\faker;
 
 final class DefaultStory extends Story
 {
-    public function __construct(private readonly DecoderInterface $decoder)
+    public function __construct(private readonly DecoderInterface $decoder, private readonly SluggerInterface $slugger)
     {
     }
 
@@ -28,6 +31,8 @@ final class DefaultStory extends Story
             'book' => 'https://openlibrary.org/books/OL2055137M.json',
             'title' => 'Hyperion',
             'author' => 'Dan Simmons',
+            'slug' => $this->slugger->slug('hyperion')->lower(),
+            'promotionStatus' => PromotionStatus::NONE,
         ]);
 
         // Default book has reviews (new users are created)
@@ -42,6 +47,7 @@ final class DefaultStory extends Story
         foreach ($data as $datum) {
             $book = BookFactory::createOne($datum + [
                 'condition' => BookCondition::cases()[array_rand(BookCondition::cases())],
+                'promotionStatus' => PromotionStatus::cases()[array_rand(PromotionStatus::cases())],
             ]);
 
             // Optionally add reviews to it (create new users)

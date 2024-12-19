@@ -11,6 +11,7 @@ use App\BookRepository\BookRepositoryInterface;
 use App\Entity\Book;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Symfony\Component\String\Slugger\SluggerInterface;
 
 /**
  * @implements ProcessorInterface<Book, Book>
@@ -24,6 +25,8 @@ final readonly class BookPersistProcessor implements ProcessorInterface
         #[Autowire(service: PersistProcessor::class)]
         private ProcessorInterface $persistProcessor,
         private BookRepositoryInterface $bookRepository,
+        // private readonly EntityManagerInterface $entityManager,
+        private readonly SluggerInterface $slugger
     ) {
     }
 
@@ -37,6 +40,10 @@ final readonly class BookPersistProcessor implements ProcessorInterface
         // this should never happen
         if (!$book instanceof Book) {
             throw new NotFoundHttpException();
+        }
+
+        if ($data instanceof Book) {
+            $data->computeSlug($this->slugger);
         }
 
         $data->title = $book->title;

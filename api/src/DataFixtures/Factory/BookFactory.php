@@ -6,11 +6,14 @@ namespace App\DataFixtures\Factory;
 
 use App\Entity\Book;
 use App\Enum\BookCondition;
+use App\Enum\PromotionStatus;
 use App\Repository\BookRepository;
+use Symfony\Component\String\Slugger\AsciiSlugger;
 use Zenstruck\Foundry\FactoryCollection;
 use Zenstruck\Foundry\Persistence\PersistentProxyObjectFactory;
 use Zenstruck\Foundry\Persistence\Proxy;
 use Zenstruck\Foundry\Persistence\ProxyRepositoryDecorator;
+use Symfony\Component\String\Slugger\SluggerInterface;
 
 /**
  * @method        Book|Proxy                                     create(array|callable $attributes = [])
@@ -53,16 +56,20 @@ use Zenstruck\Foundry\Persistence\ProxyRepositoryDecorator;
 final class BookFactory extends PersistentProxyObjectFactory
 {
     private array $data;
+    private SluggerInterface $slugger;
+    private array $usedSlugs = [];
+
 
     /**
      * @see https://symfony.com/bundles/ZenstruckFoundryBundle/current/index.html#factories-as-services
      */
-    public function __construct()
+    public function __construct(SluggerInterface $slugger)
     {
         parent::__construct();
 
         $this->data = json_decode(file_get_contents(__DIR__ . '/../books.json'), true);
         shuffle($this->data);
+        $this->slugger = $slugger;
     }
 
     /**
@@ -72,6 +79,11 @@ final class BookFactory extends PersistentProxyObjectFactory
     {
         return [
             'condition' => self::faker()->randomElement(BookCondition::getCases()),
+            'title' => self::faker()->sentence(), // Add this line to ensure title is always set
+            'slug' => function (Book $book) {
+                return $this->generateUniqueSlug($book->title);
+            },
+            'promotionStatus' => PromotionStatus::NONE,
         ];
     }
 
@@ -83,13 +95,15 @@ final class BookFactory extends PersistentProxyObjectFactory
         return $this
             ->afterInstantiate(function (Book $book): void {
                 if ($book->book && $book->title && $book->author) {
+                    $book->setSlug($this->generateUniqueSlug($book->title));
                     return;
                 }
 
                 if (!$book->book) {
                     $book->book = 'https://openlibrary.org/books/OL' . self::faker()->unique()->randomNumber(7, true) . 'M.json';
-                    $book->title ??= self::faker()->text();
+                    $book->title ??= self::faker()->sentence();
                     $book->author ??= self::faker()->name();
+                    $book->setSlug($this->slugger->slug($book->title)->lower());
 
                     return;
                 }
@@ -100,7 +114,7 @@ final class BookFactory extends PersistentProxyObjectFactory
                 });
                 if ($data) {
                     $datum = current($data);
-                    $book->title ??= $datum['title'];
+                    $book->title ??= $datum['title'] ?? self::faker()->sentence();
                     // A book can have no author
                     $book->author ??= $datum['author'] ?? self::faker()->name();
 
@@ -108,10 +122,27 @@ final class BookFactory extends PersistentProxyObjectFactory
                 }
 
                 // No Open Library book has been found in the array of books
-                $book->title ??= self::faker()->text();
+                $book->title ??= self::faker()->sentence();
                 $book->author ??= self::faker()->name();
+                $book->setSlug($this->generateUniqueSlug($book->title));
             })
         ;
+    }
+
+    private function generateUniqueSlug(string $title): string
+    {
+        $slugger = new AsciiSlugger();
+        $baseSlug = $slugger->slug($title)->lower()->toString();
+        $slug = $baseSlug;
+        $counter = 1;
+
+        while (in_array($slug, $this->usedSlugs, true)) {
+            $slug = $baseSlug . '-' . $counter;
+            $counter++;
+        }
+
+        $this->usedSlugs[] = $slug;
+        return $slug;
     }
 
     public static function class(): string

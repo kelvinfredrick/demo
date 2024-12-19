@@ -17,6 +17,7 @@ use ApiPlatform\Metadata\Post;
 use ApiPlatform\Metadata\Put;
 use ApiPlatform\Metadata\UrlGeneratorInterface;
 use App\Enum\BookCondition;
+use App\Enum\PromotionStatus;
 use App\Repository\BookRepository;
 use App\State\Processor\BookPersistProcessor;
 use App\State\Processor\BookRemoveProcessor;
@@ -31,7 +32,13 @@ use Symfony\Bridge\Doctrine\Validator\Constraints\UniqueEntity;
 use Symfony\Component\Serializer\Annotation\Groups;
 use Symfony\Component\Serializer\Normalizer\AbstractNormalizer;
 use Symfony\Component\Serializer\Normalizer\AbstractObjectNormalizer;
+use Symfony\Component\String\Slugger\AsciiSlugger;
 use Symfony\Component\Uid\Uuid;
+use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\DependencyInjection\ContainerInterface;
+
+
+use Symfony\Component\String\Slugger\SluggerInterface;
 use Symfony\Component\Validator\Constraints as Assert;
 
 /**
@@ -113,6 +120,18 @@ class Book
     #[ORM\Id]
     private ?Uuid $id = null;
 
+    private ?EntityManagerInterface $entityManager = null;
+    /**
+     * @see https://schema.org/url/
+     */
+    #[ApiProperty(types: ['https://schema.org/url'])]
+    #[Groups(groups: ['Book:read', 'Book:read:admin'])]
+    #[ORM\Column(type: 'string', length: 255, unique: true)]
+    #[Assert\Regex(
+        pattern: '/^[a-z0-9-]+$/',
+        message: 'The slug must contain only lowercase Latin letters, numbers, or hyphens.'
+    )]
+    private ?string $slug = null;
     /**
      * @see https://schema.org/itemOffered
      */
@@ -193,13 +212,153 @@ class Book
     #[Groups(groups: ['Book:read', 'Book:read:admin', 'Bookmark:read'])]
     public ?int $rating = null;
 
+    /**
+     * @see https://schema.org/isPromoted
+     */
+    #[ApiProperty(
+        types: ['https://schema.org/Boolean'],
+        example: false
+    )]
+    #[Groups(groups: ['Book:read', 'Book:read:admin', 'Book:write'])]
+    #[ORM\Column(type: 'boolean')]
+    public bool $isPromoted = false;
+
+    /**
+     * @see https://schema.org/promotionStatus
+     */
+    #[ApiProperty(
+        types: ['https://schema.org/Text'],
+        example: PromotionStatus::NONE->value,
+        security: "is_granted('OIDC_ADMIN')",
+        openapiContext: [
+            'type' => 'string',
+            'enum' => ['none', 'promotion', 'discount'],
+            'example' => 'none'
+        ]
+    )]
+    #[Groups(groups: ['Book:read', 'Book:read:admin', 'Book:write'])]
+    #[Assert\NotNull(message: "Promotion status is required.")]
+    #[ORM\Column(type: 'string', enumType: PromotionStatus::class)]
+    private PromotionStatus $promotionStatus = PromotionStatus::NONE;
+
+    #[ORM\ManyToMany(targetEntity: Category::class, inversedBy: 'books')]
+    #[ORM\JoinTable(name: 'book_categories')]
+    #[Groups(groups: ['Book:read', 'Book:read:admin', 'Book:write'])]
+    private Collection $categories;
+
     public function __construct()
     {
         $this->reviews = new ArrayCollection();
+        $this->categories = new ArrayCollection();
     }
 
     public function getId(): ?Uuid
     {
         return $this->id;
+    }
+
+    public function getPromotionStatus(): PromotionStatus
+    {
+        return $this->promotionStatus;
+    }
+
+    public function setPromotionStatus(PromotionStatus $promotionStatus): self
+    {
+        $this->promotionStatus = $promotionStatus;
+        return $this;
+    }
+
+    public function getSlug(): ?string
+    {
+        return $this->slug;
+    }
+
+    public function setSlug($slug): self
+    {
+        if ($slug instanceof \Closure) {
+            $slug = $slug($this);
+        }
+
+        $this->slug = (string) $slug;
+        return $this;
+    }
+
+    #[ORM\PrePersist]
+    #[ORM\PreUpdate]
+    public function computeSlug(): void
+    {
+        if (!$this->slug || 'book-' === substr($this->slug, 0, 5)) {
+            $slugger = new AsciiSlugger();
+            $this->slug = $this->generateUniqueSlug($slugger->slug($this->title ?? 'untitled')->lower());
+        }
+    }
+
+    private function generateUniqueSlug(string $baseSlug): string
+    {
+        $slug = $baseSlug;
+        $i = 1;
+
+        while ($this->slugExists($slug)) {
+            $slug = $baseSlug . '-' . $i++;
+        }
+
+        return $slug;
+    }
+
+    private function slugExists(string $slug): bool
+    {
+        if (!$this->entityManager) {
+            return false;
+        }
+
+        $existingBook = $this->entityManager->getRepository(self::class)->findOneBy(['slug' => $slug]);
+        return $existingBook !== null && $existingBook !== $this;
+    }
+
+    public function setEntityManager(EntityManagerInterface $entityManager): self
+    {
+        $this->entityManager = $entityManager;
+        return $this;
+    }
+
+    /**
+     * @return Collection<int, Category>
+     */
+    #[Groups(groups: ['Book:read', 'Book:read:admin'])]
+    public function getCategories(): Collection
+    {
+        return $this->categories ?? new ArrayCollection();
+    }
+
+    #[Groups(groups: ['Book:read', 'Book:read:admin', 'Book:write'])]
+    public function setCategories(iterable $categories): self
+    {
+        $this->categories = new ArrayCollection();
+        if ($categories !== null) {
+            foreach ($categories as $category) {
+                if (is_string($category) && str_starts_with($category, '/api/categories/')) {
+                    $categoryId = substr($category, strlen('/api/categories/'));
+                    $category = $this->entityManager->getReference(Category::class, $categoryId);
+                }
+                $this->addCategory($category);
+            }
+        }
+        return $this;
+    }
+    public function addCategory(Category $category): self
+    {
+        if (!$this->categories->contains($category)) {
+            $this->categories[] = $category;
+            $category->addBook($this);
+        }
+        return $this;
+    }
+
+    public function removeCategory(Category $category): self
+    {
+        if ($this->categories->removeElement($category)) {
+            $category->removeBook($this);
+        }
+        return $this;
     }
 }
